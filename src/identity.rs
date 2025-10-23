@@ -74,11 +74,11 @@ impl Eip8004 {
     ) -> Result<(i64, String)> {
         let file = serde_json::to_string(&metadata)?;
         let uri = ipfs::upload(&self.ipfs, file).await?;
-        self.register_agent_with_uri(&uri, onchain).await
+        self.register_agent(&uri, onchain).await
     }
 
     /// register an agent with given uri and metadata key value, return the agent id and tx hash
-    pub async fn register_agent_with_uri(
+    pub async fn register_agent(
         &self,
         uri: &str,
         onchain: &[(String, String)],

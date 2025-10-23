@@ -6,8 +6,8 @@ pub use identity::*;
 mod reputation;
 pub use reputation::*;
 
-// mod validation;
-// pub use validation::*;
+mod validation;
+pub use validation::*;
 
 use alloy::{
     primitives::Address, signers::local::PrivateKeySigner, transports::http::reqwest::Url,

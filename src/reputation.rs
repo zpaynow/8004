@@ -15,6 +15,19 @@ sol!(
     "abi/ReputationRegistry.abi.json"
 );
 
+sol!(
+    #[derive(Debug)]
+    struct FeedbackOnchainAuth {
+        uint256 agentId;
+        address clientAddress;
+        uint64 indexLimit;
+        uint256 expiry;
+        uint256 chainId;
+        address identityRegistry;
+        address signerAddress;
+    }
+);
+
 /// Parse address from either raw format or "eip155:chainId:{address}" format
 fn parse_address(addr: &str) -> Result<Address> {
     if addr.starts_with("eip155:") {
@@ -90,6 +103,20 @@ pub struct Feedback {
     pub proof_of_payment: Option<ProofOfPayment>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackAuth {
+    pub agent_id: i64,
+    pub client_address: String,
+    pub index_limit: u64,
+    pub expiry: i64,
+    pub chain_id: i64,
+    pub identity_registry: String,
+    pub signer_address: String,
+    /// EIP-191 or ERC-1271 signature with above fields
+    pub signature: Option<String>,
+}
+
 /// Proof of payment, this can be used for x402 proof of payment
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +132,20 @@ pub struct ProofOfPayment {
 }
 
 impl Eip8004 {
+    /// used as FeedbackAuth's index_limit
+    pub async fn get_feedback_index(&self, agent: i64, client: &str) -> Result<u64> {
+        let client = parse_address(client)?;
+        let provider = ProviderBuilder::new().connect_http(self.rpc.clone());
+        let contract = ReputationRegistry::new(self.reputation, provider);
+
+        let index = contract
+            .getLastIndex(U256::from(agent), client)
+            .call()
+            .await?;
+
+        Ok(index)
+    }
+
     /// The agentId must be a validly registered agent.
     /// The score MUST be between 0 and 100. tag1, tag2, and uri are OPTIONAL.
     /// feedbackAuth is a tuple with the structure
@@ -125,11 +166,11 @@ impl Eip8004 {
         let uri = ipfs::upload(&self.ipfs, file).await?;
 
         // Call give_feedback_with_uri
-        self.give_feedback_with_uri(&uri, "", &feedback).await
+        self.give_feedback(&uri, "", &feedback).await
     }
 
     /// Feedback with given off-chain uri and file hash, return the index and tx hash
-    pub async fn give_feedback_with_uri(
+    pub async fn give_feedback(
         &self,
         uri: &str,
         hash: &str,
@@ -201,6 +242,20 @@ impl Eip8004 {
         Ok(format!("{:?}", receipt.transaction_hash))
     }
 
+    /// Append more feedback to agent with ipfs
+    pub async fn append_response_with_ipfs(
+        &self,
+        agent: i64,
+        client: &str,
+        index: u64,
+        response: String,
+    ) -> Result<String> {
+        // Upload feedback to ipfs
+        let uri = ipfs::upload(&self.ipfs, response).await?;
+
+        self.append_response(agent, client, index, &uri, "").await
+    }
+
     /// Append more feedback to agent
     pub async fn append_response(
         &self,
@@ -236,15 +291,27 @@ impl Eip8004 {
     }
 
     /// Get agent's summary
+    /// agentId is the only mandatory parameter; others are optional filters.
+    /// Without filtering by clientAddresses, results are subject to Sybil/spam attacks.
+    /// See Security Considerations for details
     pub async fn get_summary(
         &self,
         agent: i64,
+        clients: Option<Vec<String>>,
         tag1: Option<String>,
         tag2: Option<String>,
     ) -> Result<(u64, u8)> {
         self.check_reputation()?;
 
-        let clients = self.get_clients(agent).await?;
+        let clients = if let Some(clients) = clients {
+            let mut new_clients = vec![];
+            for c in clients.iter() {
+                new_clients.push(parse_address(c)?);
+            }
+            new_clients
+        } else {
+            self.get_clients(agent).await?
+        };
 
         let provider = ProviderBuilder::new().connect_http(self.rpc.clone());
         let contract = ReputationRegistry::new(self.reputation, provider);
@@ -281,6 +348,92 @@ impl Eip8004 {
             .await?;
 
         Ok((result.score, result.tag1.0, result.tag2.0, result.isRevoked))
+    }
+
+    /// agentId is the only mandatory parameter; others are optional filters. Revoked feedback are omitted.
+    /// Returns (client_addresses, scores, tag1s, tag2s, revoked_statuses)
+    pub async fn read_all_feedback(
+        &self,
+        agent: i64,
+        clients: Option<Vec<String>>,
+        tag1: Option<String>,
+        tag2: Option<String>,
+        include_revoked: bool,
+    ) -> Result<(
+        Vec<Address>,
+        Vec<u8>,
+        Vec<[u8; 32]>,
+        Vec<[u8; 32]>,
+        Vec<bool>,
+    )> {
+        self.check_reputation()?;
+
+        let clients = if let Some(clients) = clients {
+            let mut new_clients = vec![];
+            for c in clients.iter() {
+                new_clients.push(parse_address(c)?);
+            }
+            new_clients
+        } else {
+            self.get_clients(agent).await?
+        };
+
+        let provider = ProviderBuilder::new().connect_http(self.rpc.clone());
+        let contract = ReputationRegistry::new(self.reputation, provider);
+
+        let tag1_bytes = str_to_bytes32(&tag1);
+        let tag2_bytes = str_to_bytes32(&tag2);
+
+        let result = contract
+            .readAllFeedback(
+                U256::from(agent),
+                clients,
+                tag1_bytes,
+                tag2_bytes,
+                include_revoked,
+            )
+            .call()
+            .await?;
+
+        // Convert FixedBytes to [u8; 32] arrays
+        let tag1s: Vec<[u8; 32]> = result.tag1s.iter().map(|t| t.0).collect();
+        let tag2s: Vec<[u8; 32]> = result.tag2s.iter().map(|t| t.0).collect();
+
+        Ok((
+            result.clients,
+            result.scores,
+            tag1s,
+            tag2s,
+            result.revokedStatuses,
+        ))
+    }
+
+    /// Get response count for a specific feedback, optionally filtered by responders
+    pub async fn get_response_count(
+        &self,
+        agent: i64,
+        client: &str,
+        index: u64,
+        responders: Vec<String>,
+    ) -> Result<u64> {
+        self.check_reputation()?;
+
+        let client = parse_address(client)?;
+
+        let mut responder_addresses = vec![];
+        for r in responders.iter() {
+            responder_addresses.push(parse_address(r)?);
+        }
+
+        let provider = ProviderBuilder::new().connect_http(self.rpc.clone());
+        let contract = ReputationRegistry::new(self.reputation, provider);
+
+        let count = contract
+            .getResponseCount(U256::from(agent), client, index, responder_addresses)
+            .call()
+            .await?;
+
+        Ok(count)
     }
 
     /// List all clients of agent
