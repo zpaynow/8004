@@ -1,8 +1,10 @@
-use crate::{Eip8004, ipfs};
+use crate::{Eip8004, hash_to_bytes32, ipfs, parse_address, str_to_bytes32};
 use alloy::{
-    primitives::{Address, Bytes, FixedBytes, U256, keccak256},
+    primitives::{Address, Bytes, U256, eip191_hash_message, Signature},
     providers::ProviderBuilder,
+    signers::{local::PrivateKeySigner, Signer},
     sol,
+    sol_types::SolValue,
 };
 use anyhow::{Result, anyhow};
 use chrono::prelude::{NaiveDateTime, Utc};
@@ -25,46 +27,9 @@ sol!(
         uint256 chainId;
         address identityRegistry;
         address signerAddress;
+        bytes memory signature;
     }
 );
-
-/// Parse address from either raw format or "eip155:chainId:{address}" format
-fn parse_address(addr: &str) -> Result<Address> {
-    if addr.starts_with("eip155:") {
-        // Format: "eip155:1:{address}"
-        let parts: Vec<&str> = addr.split(':').collect();
-        if parts.len() == 3 {
-            parts[2]
-                .parse()
-                .map_err(|e| anyhow!("Invalid address format: {}", e))
-        } else {
-            Err(anyhow!("Invalid eip155 format: {}", addr))
-        }
-    } else {
-        addr.parse().map_err(|e| anyhow!("Invalid address: {}", e))
-    }
-}
-
-/// Convert optional string to bytes32 using keccak256 hash, empty string becomes zero bytes
-fn str_to_bytes32(s: &Option<String>) -> FixedBytes<32> {
-    if let Some(s) = s {
-        if s.is_empty() {
-            FixedBytes::from([0u8; 32])
-        } else {
-            FixedBytes::from(keccak256(s.as_bytes()).0)
-        }
-    } else {
-        FixedBytes::from([0u8; 32])
-    }
-}
-
-/// Convert optional string to bytes32 using keccak256 hash, empty string becomes zero bytes
-fn hash_to_bytes32(s: &str) -> FixedBytes<32> {
-    let mut bytes = [0u8; 32];
-    let code = hex::decode(s.trim_start_matches("0x")).unwrap_or(vec![0u8; 32]);
-    bytes.copy_from_slice(&code);
-    FixedBytes::from(bytes)
-}
 
 /// The feedback, which can upload to ipfs and onchain
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +80,118 @@ pub struct FeedbackAuth {
     pub signer_address: String,
     /// EIP-191 or ERC-1271 signature with above fields
     pub signature: Option<String>,
+}
+
+impl FeedbackOnchainAuth {
+    /// Convert from FeedbackAuth
+    pub fn from_feedback_auth(auth: FeedbackAuth) -> Result<Self> {
+        let client_address = parse_address(&auth.client_address)?;
+        let identity_registry = parse_address(&auth.identity_registry)?;
+        let signer_address = parse_address(&auth.signer_address)?;
+
+        let signature = if let Some(sig) = auth.signature {
+            let sig_bytes = hex::decode(sig.trim_start_matches("0x"))?;
+            Bytes::from(sig_bytes)
+        } else {
+            Bytes::default()
+        };
+
+        Ok(Self {
+            agentId: U256::from(auth.agent_id),
+            clientAddress: client_address,
+            indexLimit: auth.index_limit,
+            expiry: U256::from(auth.expiry),
+            chainId: U256::from(auth.chain_id),
+            identityRegistry: identity_registry,
+            signerAddress: signer_address,
+            signature,
+        })
+    }
+
+    /// from encode hex string, back to FeedbackOnchainAuth
+    /// Decodes ABI-encoded bytes
+    pub fn from_str(s: &str) -> Result<Self> {
+        let bytes = hex::decode(s.trim_start_matches("0x"))?;
+        let decoded = Self::abi_decode(&bytes)?;
+        Ok(decoded)
+    }
+
+    /// to FeedbackOnchainAuth, and then encode to hex string
+    pub fn to_string(&self) -> String {
+        let bytes = self.to_bytes();
+        format!("0x{}", hex::encode(bytes))
+    }
+
+    /// Encode to ABI bytes
+    pub fn to_bytes(&self) -> Bytes {
+        Bytes::from(self.abi_encode())
+    }
+
+    /// Sign the FeedbackOnchainAuth with EIP-191
+    /// Creates a message hash from the struct fields (excluding signature) and signs it
+    /// Returns the signature as a hex string with "0x" prefix
+    pub async fn sign(&self, signer: &PrivateKeySigner) -> Result<String> {
+        // Create message to sign by encoding the struct fields (without signature)
+        let message = self.encode_for_signing();
+
+        // Hash with EIP-191 prefix: "\x19Ethereum Signed Message:\n" + len(message) + message
+        let message_hash = eip191_hash_message(&message);
+
+        // Sign the message hash
+        let signature = signer.sign_hash(&message_hash).await?;
+
+        // Return as hex string
+        Ok(format!("0x{}", hex::encode(signature.as_bytes())))
+    }
+
+    /// Encode the struct fields for signing (excluding signature field)
+    fn encode_for_signing(&self) -> Vec<u8> {
+        // Encode all fields except signature using ABI encoding
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&self.agentId.to_be_bytes::<32>());
+        encoded.extend_from_slice(self.clientAddress.as_slice());
+        encoded.extend_from_slice(&self.indexLimit.to_be_bytes());
+        encoded.extend_from_slice(&self.expiry.to_be_bytes::<32>());
+        encoded.extend_from_slice(&self.chainId.to_be_bytes::<32>());
+        encoded.extend_from_slice(self.identityRegistry.as_slice());
+        encoded.extend_from_slice(self.signerAddress.as_slice());
+        encoded
+    }
+
+    /// Verify the signature with EIP-191
+    /// Recovers the signer from the signature and compares with signerAddress
+    /// Note: This only handles EIP-191 verification, not ERC-1271 smart contract signatures
+    pub fn verify(&self) -> Result<bool> {
+        // Check if signature exists and has valid length (65 bytes)
+        if self.signature.len() != 65 {
+            return Ok(false);
+        }
+
+        // Parse signature bytes (r: 32 bytes, s: 32 bytes, v: 1 byte)
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes.copy_from_slice(&self.signature[..64]);
+
+        // Get the v value (recovery id)
+        let v = self.signature[64];
+
+        // Normalize v to 0 or 1 (some implementations use 27/28)
+        let parity = if v >= 27 { v - 27 } else { v };
+
+        // Create signature
+        let signature = Signature::from_bytes_and_parity(&sig_bytes, parity != 0);
+
+        // Create message to verify
+        let message = self.encode_for_signing();
+
+        // Hash with EIP-191 prefix
+        let message_hash = eip191_hash_message(&message);
+
+        // Recover signer address from signature
+        let recovered_address = signature.recover_address_from_prehash(&message_hash)?;
+
+        // Compare with signerAddress
+        Ok(recovered_address == self.signerAddress)
+    }
 }
 
 /// Proof of payment, this can be used for x402 proof of payment
@@ -198,9 +275,7 @@ impl Eip8004 {
         let file_hash = hash_to_bytes32(hash);
 
         // Parse feedback_auth as bytes
-        let auth_code =
-            hex::decode(feedback.feedback_auth.trim_start_matches("0x")).unwrap_or_default();
-        let feedback_auth = Bytes::from(auth_code);
+        let feedback_auth = FeedbackOnchainAuth::from_str(&feedback.feedback_auth)?;
 
         let call = contract.giveFeedback(
             U256::from(feedback.agent_id),
@@ -209,7 +284,7 @@ impl Eip8004 {
             tag2_bytes,
             uri.to_owned(),
             file_hash,
-            feedback_auth,
+            feedback_auth.to_bytes(),
         );
 
         // Send the transaction

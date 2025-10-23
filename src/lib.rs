@@ -1,4 +1,4 @@
-mod ipfs;
+pub mod ipfs;
 
 mod identity;
 pub use identity::*;
@@ -10,7 +10,9 @@ mod validation;
 pub use validation::*;
 
 use alloy::{
-    primitives::Address, signers::local::PrivateKeySigner, transports::http::reqwest::Url,
+    primitives::{Address, FixedBytes, keccak256},
+    signers::local::PrivateKeySigner,
+    transports::http::reqwest::Url,
 };
 use anyhow::{Result, anyhow};
 
@@ -119,4 +121,42 @@ impl Eip8004 {
             Ok(())
         }
     }
+}
+
+/// Parse address from either raw format or "eip155:chainId:{address}" format
+pub fn parse_address(addr: &str) -> Result<Address> {
+    if addr.starts_with("eip155:") {
+        // Format: "eip155:1:{address}"
+        let parts: Vec<&str> = addr.split(':').collect();
+        if parts.len() == 3 {
+            parts[2]
+                .parse()
+                .map_err(|e| anyhow!("Invalid address format: {}", e))
+        } else {
+            Err(anyhow!("Invalid eip155 format: {}", addr))
+        }
+    } else {
+        addr.parse().map_err(|e| anyhow!("Invalid address: {}", e))
+    }
+}
+
+/// Convert optional string to bytes32 using keccak256 hash, empty string becomes zero bytes
+pub fn str_to_bytes32(s: &Option<String>) -> FixedBytes<32> {
+    if let Some(s) = s {
+        if s.is_empty() {
+            FixedBytes::from([0u8; 32])
+        } else {
+            FixedBytes::from(keccak256(s.as_bytes()).0)
+        }
+    } else {
+        FixedBytes::from([0u8; 32])
+    }
+}
+
+/// Convert string hash to bytes32
+pub fn hash_to_bytes32(s: &str) -> FixedBytes<32> {
+    let mut bytes = [0u8; 32];
+    let code = hex::decode(s.trim_start_matches("0x")).unwrap_or(vec![0u8; 32]);
+    bytes.copy_from_slice(&code);
+    FixedBytes::from(bytes)
 }
