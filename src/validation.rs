@@ -24,7 +24,7 @@ impl Eip8004 {
         request: &str,
     ) -> Result<String> {
         // Upload request to ipfs
-        let uri = ipfs::upload(&self.ipfs, request.to_owned()).await?;
+        let uri = ipfs::upload(&self.clone_ipfs()?, request.to_owned()).await?;
 
         self.validation_request(validator, agent, &uri, "").await
     }
@@ -73,7 +73,7 @@ impl Eip8004 {
         tag: Option<String>,
     ) -> Result<String> {
         // Upload response to ipfs
-        let uri = ipfs::upload(&self.ipfs, response_content.to_owned()).await?;
+        let uri = ipfs::upload(&self.clone_ipfs()?, response_content.to_owned()).await?;
 
         self.validation_response(request_hash, response, &uri, "", tag)
             .await

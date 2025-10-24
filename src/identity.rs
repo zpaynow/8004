@@ -1,6 +1,6 @@
 use crate::{Eip8004, ipfs};
 use alloy::{
-    primitives::{Bytes, U256},
+    primitives::{Bytes, U256, keccak256},
     providers::ProviderBuilder,
     sol,
 };
@@ -41,6 +41,15 @@ pub struct Metadata {
     pub supported_trust: Vec<String>,
 }
 
+impl Metadata {
+    /// serialize metadata to json string and hash it
+    pub fn to_json_and_hash(&self) -> (String, String) {
+        let content = serde_json::to_string(self).unwrap_or_default();
+        let hash = keccak256(&content);
+        (content, hex::encode(hash))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataEndpoint {
@@ -73,7 +82,7 @@ impl Eip8004 {
         onchain: &[(String, String)],
     ) -> Result<(i64, String)> {
         let file = serde_json::to_string(&metadata)?;
-        let uri = ipfs::upload(&self.ipfs, file).await?;
+        let uri = ipfs::upload(&self.clone_ipfs()?, file).await?;
         self.register_agent(&uri, onchain).await
     }
 

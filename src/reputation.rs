@@ -1,8 +1,8 @@
 use crate::{Eip8004, hash_to_bytes32, ipfs, parse_address, str_to_bytes32};
 use alloy::{
-    primitives::{Address, Bytes, U256, eip191_hash_message, Signature},
+    primitives::{Address, Bytes, Signature, U256, eip191_hash_message, keccak256},
     providers::ProviderBuilder,
-    signers::{local::PrivateKeySigner, Signer},
+    signers::{Signer, local::PrivateKeySigner},
     sol,
     sol_types::SolValue,
 };
@@ -66,6 +66,15 @@ pub struct Feedback {
     /// x402 proof of payment
     #[serde(rename = "proof_of_payment")]
     pub proof_of_payment: Option<ProofOfPayment>,
+}
+
+impl Feedback {
+    /// serialize metadata to json string and hash it
+    pub fn to_json_and_hash(&self) -> (String, String) {
+        let content = serde_json::to_string(self).unwrap_or_default();
+        let hash = keccak256(&content);
+        (content, hex::encode(hash))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,7 +249,7 @@ impl Eip8004 {
 
         // Upload feedback to ipfs
         let file = serde_json::to_string(&feedback)?;
-        let uri = ipfs::upload(&self.ipfs, file).await?;
+        let uri = ipfs::upload(&self.clone_ipfs()?, file).await?;
 
         // Call give_feedback_with_uri
         self.give_feedback(&uri, "", &feedback).await
@@ -326,7 +335,7 @@ impl Eip8004 {
         response: String,
     ) -> Result<String> {
         // Upload feedback to ipfs
-        let uri = ipfs::upload(&self.ipfs, response).await?;
+        let uri = ipfs::upload(&self.clone_ipfs()?, response).await?;
 
         self.append_response(agent, client, index, &uri, "").await
     }

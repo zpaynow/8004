@@ -59,6 +59,14 @@ impl Eip8004 {
         Ok(self)
     }
 
+    pub fn clone_ipfs(&self) -> Result<String> {
+        if let Some(url) = &self.ipfs {
+            Ok(url.clone())
+        } else {
+            Err(anyhow!("No ipfs address"))
+        }
+    }
+
     pub fn with_identity(mut self, identity: &str) -> Result<Self> {
         let identity: Address = identity.parse()?;
         self.identity = identity;

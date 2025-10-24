@@ -1,5 +1,5 @@
-use eip8004::Eip8004;
 use anyhow::Result;
+use eip8004::Eip8004;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -8,8 +8,9 @@ async fn main() -> Result<()> {
     // Initialize the SDK
     let rpc_url = std::env::var("RPC_URL")
         .unwrap_or_else(|_| "https://eth-sepolia.g.alchemy.com/v2/demo".to_string());
-    let private_key = std::env::var("PRIVATE_KEY")
-        .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000000000000000000000000001".to_string());
+    let private_key = std::env::var("PRIVATE_KEY").unwrap_or_else(|_| {
+        "0x0000000000000000000000000000000000000000000000000000000000000001".to_string()
+    });
     let validation_address = std::env::var("VALIDATION_ADDRESS")
         .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string());
 

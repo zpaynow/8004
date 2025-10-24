@@ -1,6 +1,6 @@
-use eip8004::{Eip8004, Feedback, FeedbackAuth, FeedbackOnchainAuth};
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Result;
+use eip8004::{Eip8004, Feedback, FeedbackAuth, FeedbackOnchainAuth};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -9,8 +9,9 @@ async fn main() -> Result<()> {
     // Initialize the SDK
     let rpc_url = std::env::var("RPC_URL")
         .unwrap_or_else(|_| "https://eth-sepolia.g.alchemy.com/v2/demo".to_string());
-    let private_key = std::env::var("PRIVATE_KEY")
-        .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000000000000000000000000001".to_string());
+    let private_key = std::env::var("PRIVATE_KEY").unwrap_or_else(|_| {
+        "0x0000000000000000000000000000000000000000000000000000000000000001".to_string()
+    });
     let reputation_address = std::env::var("REPUTATION_ADDRESS")
         .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string());
 
