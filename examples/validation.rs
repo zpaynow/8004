@@ -6,8 +6,7 @@ async fn main() -> Result<()> {
     println!("=== EIP-8004 Validation Registry Example ===\n");
 
     // Initialize the SDK
-    let rpc_url = std::env::var("RPC_URL")
-        .unwrap_or_else(|_| "https://eth-sepolia.g.alchemy.com/v2/demo".to_string());
+    let rpc_url = std::env::var("RPC_URL").unwrap();
     let private_key = std::env::var("PRIVATE_KEY").unwrap_or_else(|_| {
         "0x0000000000000000000000000000000000000000000000000000000000000001".to_string()
     });

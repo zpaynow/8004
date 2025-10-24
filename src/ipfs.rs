@@ -106,7 +106,6 @@ pub async fn upload_with_pinata(
         .text("network", "public")
         .text("name", name)
         .text("keyvalues", "{}")
-        .text("car", "true")
         .part("file", file_part);
     if let Some(group) = group {
         form = form.text("group_id", group);
