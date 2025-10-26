@@ -148,23 +148,24 @@ use alloy::signers::local::PrivateKeySigner;
 let index = eip8004.get_feedback_index(agent_id, "eip155:1:0xClientAddress").await?;
 
 // Create feedback auth
-let auth = FeedbackAuth {
+let mut auth = FeedbackAuth {
     agent_id: 123,
     client_address: "eip155:1:0xClientAddress".to_string(),
-    index_limit: index + 10, // Allow up to 10 more feedback
+    index_limit: last_index,
     expiry: 1735689600, // Unix timestamp
     chain_id: 1,
-    identity_registry: "eip155:1:0xIdentityAddress".to_string(),
+    identity_registry: "0xIdentityAddress".to_string(),
     signer_address: "eip155:1:0xSignerAddress".to_string(),
     signature: None,
 };
 
 // Convert to onchain format
-let mut onchain_auth = FeedbackOnchainAuth::from_feedback_auth(auth)?;
+let mut onchain_auth = FeedbackOnchainAuth::from_feedback_auth(&auth)?;
 
 // Sign it
 let signer: PrivateKeySigner = "your_private_key".parse()?;
 let signature = onchain_auth.sign(&signer).await?;
+onchain_auth.signature = signature;
 
 // Get hex string for use in Feedback
 let auth_hex = onchain_auth.to_string();

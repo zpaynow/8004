@@ -77,14 +77,15 @@ impl Feedback {
     }
 }
 
+/// Main feedback auth
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeedbackAuth {
-    pub agent_id: i64,
+    pub agent_id: u64,
     pub client_address: String,
     pub index_limit: u64,
-    pub expiry: i64,
-    pub chain_id: i64,
+    pub expiry: u64,
+    pub chain_id: u64,
     pub identity_registry: String,
     pub signer_address: String,
     /// EIP-191 or ERC-1271 signature with above fields
@@ -93,12 +94,12 @@ pub struct FeedbackAuth {
 
 impl FeedbackOnchainAuth {
     /// Convert from FeedbackAuth
-    pub fn from_feedback_auth(auth: FeedbackAuth) -> Result<Self> {
+    pub fn from_feedback_auth(auth: &FeedbackAuth) -> Result<Self> {
         let client_address = parse_address(&auth.client_address)?;
         let identity_registry = parse_address(&auth.identity_registry)?;
         let signer_address = parse_address(&auth.signer_address)?;
 
-        let signature = if let Some(sig) = auth.signature {
+        let signature = if let Some(sig) = &auth.signature {
             let sig_bytes = hex::decode(sig.trim_start_matches("0x"))?;
             Bytes::from(sig_bytes)
         } else {
@@ -115,6 +116,20 @@ impl FeedbackOnchainAuth {
             signerAddress: signer_address,
             signature,
         })
+    }
+
+    /// Convert from FeedbackAuth
+    pub fn to_feedback_auth(&self) -> FeedbackAuth {
+        FeedbackAuth {
+            agent_id: self.agentId.to::<u64>(),
+            client_address: format!("eip155:1:{}", self.clientAddress.to_checksum(None)),
+            index_limit: self.indexLimit as u64,
+            expiry: self.expiry.to::<u64>(),
+            chain_id: self.chainId.to::<u64>(),
+            identity_registry: self.identityRegistry.to_checksum(None),
+            signer_address: self.signerAddress.to_checksum(None),
+            signature: Some(format!("0x{}", hex::encode(&self.signature))),
+        }
     }
 
     /// from encode hex string, back to FeedbackOnchainAuth
@@ -139,7 +154,7 @@ impl FeedbackOnchainAuth {
     /// Sign the FeedbackOnchainAuth with EIP-191
     /// Creates a message hash from the struct fields (excluding signature) and signs it
     /// Returns the signature as a hex string with "0x" prefix
-    pub async fn sign(&self, signer: &PrivateKeySigner) -> Result<String> {
+    pub async fn sign(&mut self, signer: &PrivateKeySigner) -> Result<String> {
         // Create message to sign by encoding the struct fields (without signature)
         let message = self.encode_for_signing();
 
@@ -147,10 +162,10 @@ impl FeedbackOnchainAuth {
         let message_hash = eip191_hash_message(&message);
 
         // Sign the message hash
-        let signature = signer.sign_hash(&message_hash).await?;
+        self.signature = Bytes::from(signer.sign_hash(&message_hash).await?.as_bytes());
 
         // Return as hex string
-        Ok(format!("0x{}", hex::encode(signature.as_bytes())))
+        Ok(format!("0x{}", hex::encode(&self.signature)))
     }
 
     /// Encode the struct fields for signing (excluding signature field)
