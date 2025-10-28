@@ -158,8 +158,11 @@ impl FeedbackOnchainAuth {
         // Create message to sign by encoding the struct fields (without signature)
         let message = self.encode_for_signing();
 
-        // Hash with EIP-191 prefix: "\x19Ethereum Signed Message:\n" + len(message) + message
-        let message_hash = eip191_hash_message(&message);
+        // Hash the ABI-encoded message with keccak256 first (matching Solidity's keccak256(abi.encode(...)))
+        let hash = keccak256(&message);
+
+        // Then apply EIP-191 prefix to the hash (matching Solidity's .toEthSignedMessageHash())
+        let message_hash = eip191_hash_message(hash);
 
         // Sign the message hash
         self.signature = Bytes::from(signer.sign_hash(&message_hash).await?.as_bytes());
@@ -169,17 +172,20 @@ impl FeedbackOnchainAuth {
     }
 
     /// Encode the struct fields for signing (excluding signature field)
+    /// Uses proper ABI encoding to match Solidity's abi.encode()
     fn encode_for_signing(&self) -> Vec<u8> {
-        // Encode all fields except signature using ABI encoding
-        let mut encoded = Vec::new();
-        encoded.extend_from_slice(&self.agentId.to_be_bytes::<32>());
-        encoded.extend_from_slice(self.clientAddress.as_slice());
-        encoded.extend_from_slice(&self.indexLimit.to_be_bytes());
-        encoded.extend_from_slice(&self.expiry.to_be_bytes::<32>());
-        encoded.extend_from_slice(&self.chainId.to_be_bytes::<32>());
-        encoded.extend_from_slice(self.identityRegistry.as_slice());
-        encoded.extend_from_slice(self.signerAddress.as_slice());
-        encoded
+        // Create a tuple of all fields except signature and use SolValue::abi_encode
+        // This matches Solidity's abi.encode(agentId, clientAddress, indexLimit, expiry, chainId, identityRegistry, signerAddress)
+        let tuple = (
+            self.agentId,
+            self.clientAddress,
+            self.indexLimit,
+            self.expiry,
+            self.chainId,
+            self.identityRegistry,
+            self.signerAddress,
+        );
+        tuple.abi_encode()
     }
 
     /// Verify the signature with EIP-191
@@ -207,8 +213,11 @@ impl FeedbackOnchainAuth {
         // Create message to verify
         let message = self.encode_for_signing();
 
-        // Hash with EIP-191 prefix
-        let message_hash = eip191_hash_message(&message);
+        // Hash the ABI-encoded message with keccak256 first (matching Solidity's keccak256(abi.encode(...)))
+        let hash = keccak256(&message);
+
+        // Then apply EIP-191 prefix to the hash (matching Solidity's .toEthSignedMessageHash())
+        let message_hash = eip191_hash_message(hash);
 
         // Recover signer address from signature
         let recovered_address = signature.recover_address_from_prehash(&message_hash)?;
